@@ -73,14 +73,23 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Кнопка открытия КОРНЕВЫХ настроек Android
+        // Кнопка открытия КОРНЕВЫХ настроек Android (сначала TV, потом универсальные)
         btnSystemSettings.setOnClickListener(v -> {
+            // Попытка 1: Открыть настройки, специфичные для Android TV
+            Intent tvSettingsIntent = new Intent("android.settings.TV_SETTINGS");
+            tvSettingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
             try {
-                // Открываем главное меню настроек
-                Intent intent = new Intent(Settings.ACTION_SETTINGS);
-                startActivity(intent);
+                startActivity(tvSettingsIntent);
             } catch (Exception e) {
-                toast("Не удалось открыть настройки Android");
+                // Попытка 2: Если TV-настройки не найдены, открываем универсальные
+                Intent universalIntent = new Intent(Settings.ACTION_SETTINGS);
+                universalIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    startActivity(universalIntent);
+                } catch (Exception ex) {
+                    toast("Не удалось открыть настройки Android");
+                }
             }
         });
 
