@@ -43,11 +43,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class ScreenStreamService extends Service {
 
     private static final String TAG = "ScreenStreamService";
-    public static final String ACTION_START    = "ru.miacomsoft.webrdp.START";
-    public static final String ACTION_STOP     = "ru.miacomsoft.webrdp.STOP";
-    public static final String ACTION_RESTART  = "ru.miacomsoft.webrdp.RESTART";
-    public static final String EXTRA_RESULT_CODE = "rc";
-    public static final String EXTRA_RESULT_DATA = "rd";
+    public static final String ACTION_START       = "ru.miacomsoft.webrdp.START";
+    public static final String ACTION_STOP        = "ru.miacomsoft.webrdp.STOP";
+    public static final String ACTION_RESTART     = "ru.miacomsoft.webrdp.RESTART";
+    public static final String ACTION_SHARE_FILE  = "ru.miacomsoft.webrdp.SHARE_FILE";
+    public static final String EXTRA_RESULT_CODE  = "rc";
+    public static final String EXTRA_RESULT_DATA  = "rd";
     private static final String CHANNEL_ID = "webrdp_svc";
     private static final int NOTIF_ID = 0x5B;
 
@@ -63,10 +64,10 @@ public class ScreenStreamService extends Service {
     private VideoSource videoSource;
     private VideoTrack videoTrack;
 
-    // Список клиентов (сессий)
     public class ClientSession {
         public String id;
         public PeerConnection pc;
+        public DataChannel dataChannel;
         public List<IceCandidate> serverIce = new CopyOnWriteArrayList<>();
         public ClientSession(String id) { this.id = id; }
     }
@@ -116,11 +117,39 @@ public class ScreenStreamService extends Service {
             startProjection(rc, rd);
         }
 
+        if (ACTION_SHARE_FILE.equals(action)) {
+            String filename = intent.getStringExtra("filename");
+            if (filename != null) broadcastDownload(filename);
+            return START_STICKY;
+        }
+
         if (httpServer == null) startHttpServer();
         return START_STICKY;
     }
 
+    public void broadcastDownload(String filename) {
+        try {
+            String encodedName = java.net.URLEncoder.encode(filename, "UTF-8");
+            String json = "{\"t\":\"download\",\"filename\":\"" + filename + "\",\"url\":\"/api/download?name=" + encodedName + "\"}";
+            org.webrtc.DataChannel.Buffer buffer = new org.webrtc.DataChannel.Buffer(
+                    java.nio.ByteBuffer.wrap(json.getBytes("UTF-8")), false
+            );
+            for (ClientSession session : clients.values()) {
+                if (session.dataChannel != null && session.dataChannel.state() == DataChannel.State.OPEN) {
+                    session.dataChannel.send(buffer);
+                }
+            }
+            Log.i(TAG, "Broadcasted download for: " + filename);
+        } catch (Exception e) { Log.e(TAG, "broadcast error", e); }
+    }
+
     private void startProjection(int resultCode, Intent data) {
+        // Защита от повторного запуска, который ломает текущие соединения
+        if (videoTrack != null) {
+            Log.w(TAG, "Projection already running, ignoring start request.");
+            return;
+        }
+
         try {
             MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
             mediaProjection = mpm.getMediaProjection(resultCode, data);
@@ -155,7 +184,6 @@ public class ScreenStreamService extends Service {
                 .createPeerConnectionFactory();
     }
 
-    // Создает новый PeerConnection для клиента
     private PeerConnection createPeerConnectionForClient(final String clientId) {
         List<PeerConnection.IceServer> ice = new ArrayList<>();
         PeerConnection.RTCConfiguration cfg = new PeerConnection.RTCConfiguration(ice);
@@ -180,6 +208,9 @@ public class ScreenStreamService extends Service {
             @Override public void onAddStream(MediaStream s) {}
             @Override public void onRemoveStream(MediaStream s) {}
             @Override public void onDataChannel(DataChannel dc) {
+                ClientSession session = clients.get(clientId);
+                if (session != null) session.dataChannel = dc;
+
                 dc.registerObserver(new DataChannel.Observer() {
                     @Override public void onBufferedAmountChange(long l) {}
                     @Override public void onStateChange() {}
@@ -188,7 +219,6 @@ public class ScreenStreamService extends Service {
                             ByteBuffer data = buffer.data;
                             byte[] bytes = new byte[data.remaining()];
                             data.get(bytes);
-                            // Любой клиент может управлять
                             RemoteControlAccessibilityService.handleMessage(new String(bytes, "UTF-8"));
                         } catch (Exception e) {
                             Log.e(TAG, "DataChannel msg error", e);
@@ -201,7 +231,6 @@ public class ScreenStreamService extends Service {
         });
 
         if (pc != null && videoTrack != null) {
-            // Один видеотрек раздается всем клиентам
             pc.addTrack(videoTrack, Collections.singletonList("screen"));
         }
         return pc;
@@ -210,7 +239,10 @@ public class ScreenStreamService extends Service {
     public String handleOffer(String offerSdp, String clientId) throws Exception {
         final long TIMEOUT_MS = 5000;
 
-        // Удаляем старую сессию с таким же ID, если она зависла
+        if (videoTrack == null) {
+            throw new IllegalStateException("Projection not started. Press 'Start' on the device.");
+        }
+
         removeClient(clientId);
 
         final PeerConnection pc = createPeerConnectionForClient(clientId);

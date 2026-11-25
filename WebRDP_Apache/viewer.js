@@ -134,6 +134,32 @@
     dc.onopen = () => log('DataChannel открыт (Управление доступно)');
     dc.onclose = () => log('DataChannel закрыт');
 
+    // --- НОВЫЙ БЛОК: Обработка команды на скачивание файла с Android ---
+    dc.onmessage = async (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.t === 'download') {
+          log('Скачивание: ' + msg.filename);
+          const res = await fetchAuth(baseUrl + msg.url);
+          if (res.ok) {
+            const blob = await res.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = msg.filename;
+            document.body.appendChild(a); // Требуется для некоторых браузеров
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+          } else {
+            log('Ошибка скачивания: ' + res.status);
+          }
+        }
+      } catch (err) {
+        // Игнорируем сообщения, которые не являются JSON
+      }
+    };
+    // -------------------------------------------------------------------
+
     pc.addTransceiver('video', { direction: 'recvonly' });
 
     const offer = await pc.createOffer();
@@ -145,9 +171,9 @@
       body: offer.sdp,
       headers: { 'Content-Type': 'application/sdp' }
     });
-    
+
     if (!r.ok) throw new Error('Ошибка сигналинга: ' + r.status);
-    
+
     const answerSdp = await r.text();
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
@@ -180,7 +206,7 @@
     };
   }
 
-  // --- Управление (осталось без изменений) ---
+  // --- Управление ---
   function getNormalizedCoords(e) {
     const rect = video.getBoundingClientRect();
     const vWidth = video.videoWidth;
@@ -289,7 +315,7 @@
     if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj));
   }
 
-  // --- Drag and Drop ---
+  // --- Drag and Drop (Загрузка файлов на Android) ---
   window.addEventListener('dragenter', (e) => {
     e.preventDefault();
     if (wrap.style.display !== 'none') dropZone.style.display = 'flex';

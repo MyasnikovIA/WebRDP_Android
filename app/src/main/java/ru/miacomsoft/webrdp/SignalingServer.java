@@ -16,6 +16,7 @@ import org.webrtc.IceCandidate;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -50,6 +51,7 @@ public class SignalingServer {
         server.createContext("/api/ice", new IceHandler());
         server.createContext("/api/reset", new ResetHandler());
         server.createContext("/api/upload", new UploadHandler());
+        server.createContext("/api/download", new DownloadHandler());
         server.start();
     }
 
@@ -187,6 +189,35 @@ public class SignalingServer {
             } catch (Exception e) {
                 sendBytes(ex, 500, ("error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8), "text/plain");
             }
+        }
+    }
+
+    private class DownloadHandler implements HttpHandler {
+        @Override public void handle(HttpExchange ex) throws IOException {
+            cors(ex.getResponseHeaders());
+            if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 204, null, null); return; }
+            if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
+
+            String query = ex.getRequestURI().getQuery();
+            String filename = null;
+            if (query != null && query.startsWith("name=")) {
+                try { filename = URLDecoder.decode(query.substring(5), "UTF-8"); } catch (Exception ignored) {}
+            }
+            if (filename == null || filename.contains("..")) { sendBytes(ex, 400, null, null); return; }
+
+            File file = new File(ctx.getCacheDir(), "shared_files/" + filename);
+            if (!file.exists()) { sendBytes(ex, 404, null, null); return; }
+
+            Headers h = ex.getResponseHeaders();
+            h.set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+            h.set("Content-Type", "application/octet-stream");
+            ex.sendResponseHeaders(200, file.length());
+
+            try (OutputStream os = ex.getResponseBody(); FileInputStream fis = new FileInputStream(file)) {
+                byte[] buf = new byte[8192]; int n;
+                while ((n = fis.read(buf)) > 0) os.write(buf, 0, n);
+            }
+            ex.close();
         }
     }
 
