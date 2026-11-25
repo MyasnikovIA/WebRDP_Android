@@ -48,7 +48,8 @@ public class SignalingServer {
         server.createContext("/api/offer", new OfferHandler());
         server.createContext("/api/ice", new IceHandler());
         server.createContext("/api/reset", new ResetHandler());
-        server.createContext("/api/upload", new UploadHandler()); // НОВЫЙ ЭНДПОИНТ
+        server.createContext("/api/upload", new UploadHandler());
+        server.createContext("/api/config", new ConfigHandler()); // НОВЫЙ ЭНДПОИНТ
         server.start();
     }
 
@@ -106,6 +107,22 @@ public class SignalingServer {
 
     // ================= handlers =================
 
+    // НОВЫЙ ОБРАБОТЧИК КОНФИГУРАЦИИ
+    private class ConfigHandler implements HttpHandler {
+        @Override public void handle(HttpExchange ex) throws IOException {
+            cors(ex.getResponseHeaders());
+            if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 204, null, null); return; }
+            if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
+            try {
+                JSONObject config = new JSONObject();
+                config.put("stunPort", settings.getStunPort());
+                sendBytes(ex, 200, config.toString().getBytes(StandardCharsets.UTF_8), "application/json");
+            } catch (Exception e) {
+                sendBytes(ex, 500, "error".getBytes(StandardCharsets.UTF_8), "text/plain");
+            }
+        }
+    }
+
     private class UiHandler implements HttpHandler {
         @Override public void handle(HttpExchange ex) throws IOException {
             cors(ex.getResponseHeaders());
@@ -137,7 +154,6 @@ public class SignalingServer {
         }
     }
 
-    // НОВЫЙ ОБРАБОТЧИК ДЛЯ ФАЙЛОВ
     private class UploadHandler implements HttpHandler {
         @Override public void handle(HttpExchange ex) throws IOException {
             cors(ex.getResponseHeaders());
@@ -145,7 +161,6 @@ public class SignalingServer {
             if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 405, null, null); return; }
 
-            // Извлекаем имя файла из параметра ?name=
             String query = ex.getRequestURI().getQuery();
             String filename = "uploaded_file_" + System.currentTimeMillis() + ".bin";
             if (query != null && query.startsWith("name=")) {
@@ -154,11 +169,9 @@ public class SignalingServer {
                 } catch (Exception ignored) {}
             }
 
-            // Защита от взлома путей (Directory Traversal)
             filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
 
             try {
-                // Сохраняем в папку Download
                 File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 if (!downloadDir.exists()) downloadDir.mkdirs();
                 File destFile = new File(downloadDir, filename);

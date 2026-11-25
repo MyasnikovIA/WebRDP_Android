@@ -51,9 +51,9 @@ public class ScreenStreamService extends Service {
 
     private SettingsManager settings;
     private SignalingServer httpServer;
+    private StunServer stunServer;
     private MediaProjection mediaProjection;
 
-    // WebRTC
     private PeerConnectionFactory pcFactory;
     private EglBase eglBase;
     private VideoCapturer capturer;
@@ -86,7 +86,6 @@ public class ScreenStreamService extends Service {
 
         boolean hasProjection = intent != null && intent.hasExtra(EXTRA_RESULT_DATA);
 
-        // Стартуем как foreground-service
         int fgType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
         if (hasProjection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             fgType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
@@ -99,7 +98,6 @@ public class ScreenStreamService extends Service {
         }
 
         if (ACTION_RESTART.equals(action)) {
-            // Перезапуск HTTP-сервера с новыми настройками (проекция остаётся живой)
             stopHttpServer();
             startHttpServer();
             return START_STICKY;
@@ -115,7 +113,6 @@ public class ScreenStreamService extends Service {
         return START_STICKY;
     }
 
-    // ---------- Projection ----------
     private void startProjection(int resultCode, Intent data) {
         try {
             MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
@@ -134,18 +131,12 @@ public class ScreenStreamService extends Service {
             capturer.startCapture(1280, 720, 30);
 
             videoTrack = pcFactory.createVideoTrack("screen0", videoSource);
-
-            // ВНИМАНИЕ: Строка ниже удалена, так как в данной версии WebRTC SDK
-            // класс VideoTrack не содержит ContentHint. Кодировщик справится и так.
-            // videoTrack.setContentHint(...);
-
             Log.i(TAG, "Projection started");
         } catch (Exception e) {
             Log.e(TAG, "startProjection failed", e);
         }
     }
 
-    // ---------- WebRTC ----------
     private void initWebRtcFactory() {
         PeerConnectionFactory.InitializationOptions init = PeerConnectionFactory.InitializationOptions.builder(this)
                 .setEnableInternalTracer(false).createInitializationOptions();
@@ -160,8 +151,11 @@ public class ScreenStreamService extends Service {
     private PeerConnection ensurePeerConnection() {
         synchronized (pcLock) {
             if (peerConnection != null) return peerConnection;
+
+            // ВАЖНО: Убираем STUN из Android-клиента, чтобы он не передавал
+            // ложный адрес 127.0.0.1. Он будет использовать только Host Candidates (свой реальный IP).
             List<PeerConnection.IceServer> ice = new ArrayList<>();
-            ice.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
+
             PeerConnection.RTCConfiguration cfg = new PeerConnection.RTCConfiguration(ice);
             cfg.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
             cfg.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
@@ -205,7 +199,6 @@ public class ScreenStreamService extends Service {
         }
     }
 
-    /** Вызывается SignalingServer при POST /api/offer — возвращает SDP-answer. */
     public String handleOffer(String offerSdp) throws Exception {
         final long TIMEOUT_MS = 5000;
 
@@ -274,7 +267,7 @@ public class ScreenStreamService extends Service {
 
         try { Thread.sleep(800); } catch (InterruptedException ignored) {}
 
-        android.util.Log.i(TAG, "handleOffer ok, answer len=" + answerHolder[0].description.length()
+        Log.i(TAG, "handleOffer ok, answer len=" + answerHolder[0].description.length()
                 + ", pending ice=" + pendingServerToClientIce.size());
 
         return answerHolder[0].description;
@@ -300,8 +293,8 @@ public class ScreenStreamService extends Service {
         }
     }
 
-    // ---------- HTTP ----------
     private void startHttpServer() {
+        startStunServer();
         try {
             httpServer = new SignalingServer(this, settings);
             httpServer.start();
@@ -312,10 +305,27 @@ public class ScreenStreamService extends Service {
     }
 
     private void stopHttpServer() {
+        stopStunServer();
         if (httpServer != null) { httpServer.stop(); httpServer = null; }
     }
 
-    // ---------- Service ----------
+    private void startStunServer() {
+        try {
+            stunServer = new StunServer(settings.getStunPort());
+            stunServer.startServer();
+            Log.i(TAG, "STUN server started on " + settings.getStunPort());
+        } catch (Exception e) {
+            Log.e(TAG, "STUN start failed", e);
+        }
+    }
+
+    private void stopStunServer() {
+        if (stunServer != null) {
+            stunServer.stopServer();
+            stunServer = null;
+        }
+    }
+
     private void stopAll() {
         stopHttpServer();
         resetPeerConnection();

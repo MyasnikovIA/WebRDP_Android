@@ -34,6 +34,20 @@
             android:inputType="number"
             android:text="8086" />
 
+        <!-- НОВОЕ ПОЛЕ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="STUN-порт (UDP)"
+            android:textStyle="bold" />
+        <EditText
+            android:id="@+id/etStunPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:text="3478" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -130,7 +144,6 @@
             android:layout_marginTop="8dp"
             android:text="Остановить сервис" />
 
-        <!-- НОВАЯ КНОПКА НАСТРОЕК ANDROID -->
         <Button
             android:id="@+id/btnSystemSettings"
             android:layout_width="match_parent"

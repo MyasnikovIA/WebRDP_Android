@@ -7,6 +7,7 @@ public class SettingsManager {
     private static final String PREFS = "webrdp_prefs";
     public static final String KEY_HTTP_PORT   = "http_port";
     public static final String KEY_SIGNAL_PORT = "signal_port";
+    public static final String KEY_STUN_PORT   = "stun_port"; // НОВОЕ
     public static final String KEY_USERNAME    = "username";
     public static final String KEY_PASSWORD    = "password";
     public static final String KEY_AUTOSTART   = "autostart";
@@ -22,6 +23,10 @@ public class SettingsManager {
 
     public int getSignalPort() { return prefs.getInt(KEY_SIGNAL_PORT, 8086); }
     public void setSignalPort(int p) { prefs.edit().putInt(KEY_SIGNAL_PORT, p).apply(); }
+
+    // НОВЫЕ МЕТОДЫ
+    public int getStunPort() { return prefs.getInt(KEY_STUN_PORT, 3478); }
+    public void setStunPort(int p) { prefs.edit().putInt(KEY_STUN_PORT, p).apply(); }
 
     public String getUsername() { return prefs.getString(KEY_USERNAME, "admin"); }
     public void setUsername(String s) { prefs.edit().putString(KEY_USERNAME, s).apply(); }

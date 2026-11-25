@@ -25,7 +25,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_PROJ = 101;
     private static final int REQ_PERM = 102;
 
-    private EditText etHttpPort, etSignalPort, etUser, etPass;
+    private EditText etHttpPort, etSignalPort, etStunPort, etUser, etPass;
     private CheckBox cbAutostart;
     private TextView tvAccStatus, tvOverlayStatus;
     private SettingsManager settings;
@@ -38,6 +38,7 @@ public class MainActivity extends AppCompatActivity {
 
         etHttpPort    = findViewById(R.id.etHttpPort);
         etSignalPort  = findViewById(R.id.etSignalPort);
+        etStunPort    = findViewById(R.id.etStunPort);
         etUser        = findViewById(R.id.etUser);
         etPass        = findViewById(R.id.etPass);
         cbAutostart   = findViewById(R.id.cbAutostart);
@@ -52,13 +53,11 @@ public class MainActivity extends AppCompatActivity {
         loadSettings();
         requestRuntimePermissions();
 
-        // Кнопка включения спец. возможностей
         btnEnableAccessibility.setOnClickListener(v -> {
             Toast.makeText(this, "Найдите 'WebRDP' в списке и включите", Toast.LENGTH_LONG).show();
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
         });
 
-        // Кнопка выдачи разрешения «Поверх других окон»
         btnOverlayPermission.setOnClickListener(v -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (!Settings.canDrawOverlays(this)) {
@@ -73,16 +72,13 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Кнопка открытия КОРНЕВЫХ настроек Android (сначала TV, потом универсальные)
         btnSystemSettings.setOnClickListener(v -> {
-            // Попытка 1: Открыть настройки, специфичные для Android TV
             Intent tvSettingsIntent = new Intent("android.settings.TV_SETTINGS");
             tvSettingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
             try {
                 startActivity(tvSettingsIntent);
             } catch (Exception e) {
-                // Попытка 2: Если TV-настройки не найдены, открываем универсальные
                 Intent universalIntent = new Intent(Settings.ACTION_SETTINGS);
                 universalIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 try {
@@ -122,12 +118,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updatePermissionsStatus() {
-        // 1. Проверка Accessibility
         boolean accEnabled = isAccessibilityServiceEnabled();
         tvAccStatus.setText(accEnabled ? "Управление: ВКЛЮЧЕНО" : "Управление: ВЫКЛЮЧЕНО");
         tvAccStatus.setTextColor(accEnabled ? 0xFF388E3C : 0xFFD32F2F);
 
-        // 2. Проверка Overlay (Поверх других окон)
         boolean overlayEnabled = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             overlayEnabled = Settings.canDrawOverlays(this);
@@ -164,6 +158,7 @@ public class MainActivity extends AppCompatActivity {
     private void loadSettings() {
         etHttpPort.setText(String.valueOf(settings.getHttpPort()));
         etSignalPort.setText(String.valueOf(settings.getSignalPort()));
+        etStunPort.setText(String.valueOf(settings.getStunPort())); // Загрузка STUN
         etUser.setText(settings.getUsername());
         etPass.setText(settings.getPassword());
         cbAutostart.setChecked(settings.isAutostart());
@@ -172,12 +167,14 @@ public class MainActivity extends AppCompatActivity {
     private void saveSettings() {
         int hp = parseIntSafe(etHttpPort.getText().toString(), 8085);
         int sp = parseIntSafe(etSignalPort.getText().toString(), 8086);
+        int stp = parseIntSafe(etStunPort.getText().toString(), 3478); // Сохранение STUN
         String u = etUser.getText().toString().trim();
         String p = etPass.getText().toString();
         if (TextUtils.isEmpty(u)) u = "admin";
         if (TextUtils.isEmpty(p)) p = "admin";
         settings.setHttpPort(hp);
         settings.setSignalPort(sp);
+        settings.setStunPort(stp);
         settings.setUsername(u);
         settings.setPassword(p);
         settings.setAutostart(cbAutostart.isChecked());

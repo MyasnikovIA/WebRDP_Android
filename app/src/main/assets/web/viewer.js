@@ -8,8 +8,23 @@
   let pc, dc;
 
   async function start() {
+    // 1. Получаем настройки (порт STUN) с сервера
+    let stunPort = 3478; // Значение по умолчанию
+    try {
+      const cfgRes = await fetch('api/config');
+      if (cfgRes.ok) {
+        const cfg = await cfgRes.json();
+        stunPort = cfg.stunPort;
+      }
+    } catch (e) { console.warn('Не удалось получить конфиг, используем дефолт', e); }
+
+    // 2. Настраиваем PeerConnection с локальным STUN
+    const host = window.location.hostname;
+    const stunUrl = `stun:${host}:${stunPort}`;
+    log(`Используем STUN: ${stunUrl}`);
+
     pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [{ urls: stunUrl }]
     });
 
     pc.ontrack = (e) => {
@@ -198,7 +213,6 @@
 
   window.addEventListener('dragleave', (e) => {
     e.preventDefault();
-    // Скрываем оверлей только если курсор ушел за пределы окна
     if (e.relatedTarget === null || e.relatedTarget.id === 'wrap' || e.clientX === 0) {
       dropZone.style.display = 'none';
     }
@@ -220,7 +234,6 @@
           method: 'POST',
           body: file,
           headers: {
-            // Если браузер требует явной авторизации
             'Content-Type': 'application/octet-stream'
           }
         });
