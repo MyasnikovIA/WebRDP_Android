@@ -9,9 +9,17 @@
   #wrap { position:relative; width:100vw; height:100vh; overflow:hidden; outline:none; }
   video { width:100%; height:100%; object-fit:contain; cursor:crosshair; }
   #status { position:absolute; top:8px; left:8px; background:rgba(0,0,0,.6);
-            padding:6px 10px; border-radius:6px; font-size:13px; pointer-events:none; }
+            padding:6px 10px; border-radius:6px; font-size:13px; pointer-events:none; z-index:10; }
   #log { position:absolute; bottom:8px; left:8px; right:8px; font-size:11px;
-         color:#8f8; white-space:pre-wrap; pointer-events:none; }
+         color:#8f8; white-space:pre-wrap; pointer-events:none; z-index:10; }
+
+  /* Слой для Drag-and-Drop */
+  #drop-zone {
+    display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.7); border: 5px dashed #4CAF50; box-sizing: border-box;
+    z-index: 9999; color: #fff; font-size: 24px; justify-content: center; align-items: center;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -20,6 +28,10 @@
     <div id="status">Подключение…</div>
     <div id="log"></div>
 </div>
+
+<!-- Оверлей для загрузки файлов -->
+<div id="drop-zone">Отпустите файл, чтобы сохранить его в папку Download</div>
+
 <script src="/viewer.js"></script>
 <script>
   // Автоматический фокус на контейнер для перехвата клавиатуры

@@ -2,6 +2,7 @@
   const video = document.getElementById('video');
   const status = document.getElementById('status');
   const logEl = document.getElementById('log');
+  const dropZone = document.getElementById('drop-zone');
   const log = (s) => { logEl.textContent = s; };
 
   let pc, dc;
@@ -101,11 +102,7 @@
 
   video.addEventListener('mousedown', (e) => {
     e.preventDefault();
-
-    if (e.button === 2) {
-      sendControl({ t: 'back' });
-      return;
-    }
+    if (e.button === 2) { sendControl({ t: 'back' }); return; }
 
     if (e.button === 0) {
       const coords = getNormalizedCoords(e);
@@ -154,12 +151,10 @@
     }
   });
 
-  // --- ПРОКРУТКА КОЛЕСИКОМ МЫШИ ---
   let lastScrollTime = 0;
   video.addEventListener('wheel', (e) => {
     e.preventDefault();
     const now = Date.now();
-    // Ограничиваем частоту до 12 раз в секунду, чтобы не флудить в DataChannel
     if (now - lastScrollTime < 80) return;
     lastScrollTime = now;
 
@@ -168,7 +163,6 @@
       sendControl({ t: 'scroll', x: coords.x, y: coords.y, deltaY: e.deltaY });
     }
   }, { passive: false });
-  // ---------------------------------
 
   video.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -191,6 +185,58 @@
       dc.send(JSON.stringify(obj));
     }
   }
+
+  // --- Drag and Drop ---
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dropZone.style.display = 'flex';
+  });
+
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    // Скрываем оверлей только если курсор ушел за пределы окна
+    if (e.relatedTarget === null || e.relatedTarget.id === 'wrap' || e.clientX === 0) {
+      dropZone.style.display = 'none';
+    }
+  });
+
+  window.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropZone.style.display = 'none';
+
+    const files = e.dataTransfer.files;
+    if (files.length === 0) return;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      status.textContent = `Загрузка: ${file.name}...`;
+
+      try {
+        const res = await fetch(`api/upload?name=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          body: file,
+          headers: {
+            // Если браузер требует явной авторизации
+            'Content-Type': 'application/octet-stream'
+          }
+        });
+
+        if (res.ok) {
+          log(`Файл ${file.name} сохранен в Download`);
+        } else {
+          log(`Ошибка загрузки ${file.name}: ${res.status}`);
+        }
+      } catch (err) {
+        log(`Сбой сети при загрузке ${file.name}`);
+      }
+    }
+    status.textContent = 'Трансляция активна';
+  });
+  // --------------------
 
   start().catch((e) => { status.textContent = 'Ошибка: ' + e.message; console.error(e); });
 })();

@@ -1,6 +1,7 @@
 package ru.miacomsoft.webrdp;
 
 import android.content.Context;
+import android.os.Environment;
 import android.util.Base64;
 import android.util.Log;
 
@@ -14,10 +15,13 @@ import org.json.JSONObject;
 import org.webrtc.IceCandidate;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -44,6 +48,7 @@ public class SignalingServer {
         server.createContext("/api/offer", new OfferHandler());
         server.createContext("/api/ice", new IceHandler());
         server.createContext("/api/reset", new ResetHandler());
+        server.createContext("/api/upload", new UploadHandler()); // НОВЫЙ ЭНДПОИНТ
         server.start();
     }
 
@@ -96,8 +101,6 @@ public class SignalingServer {
     }
 
     private ScreenStreamService svc() {
-        // Сервис — синглтон-подобный доступ через Application?
-        // В реальном проекте удобно хранить статическую ссылку в самом сервисе.
         return ScreenStreamServiceHolder.get();
     }
 
@@ -131,6 +134,51 @@ public class SignalingServer {
             if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
             try { sendBytes(ex, 200, readAsset(path), mime + "; charset=utf-8"); }
             catch (Exception e) { sendBytes(ex, 404, "Not found".getBytes(StandardCharsets.UTF_8), "text/plain"); }
+        }
+    }
+
+    // НОВЫЙ ОБРАБОТЧИК ДЛЯ ФАЙЛОВ
+    private class UploadHandler implements HttpHandler {
+        @Override public void handle(HttpExchange ex) throws IOException {
+            cors(ex.getResponseHeaders());
+            if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 204, null, null); return; }
+            if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
+            if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 405, null, null); return; }
+
+            // Извлекаем имя файла из параметра ?name=
+            String query = ex.getRequestURI().getQuery();
+            String filename = "uploaded_file_" + System.currentTimeMillis() + ".bin";
+            if (query != null && query.startsWith("name=")) {
+                try {
+                    filename = URLDecoder.decode(query.substring(5), "UTF-8");
+                } catch (Exception ignored) {}
+            }
+
+            // Защита от взлома путей (Directory Traversal)
+            filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
+
+            try {
+                // Сохраняем в папку Download
+                File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (!downloadDir.exists()) downloadDir.mkdirs();
+                File destFile = new File(downloadDir, filename);
+
+                try (InputStream in = ex.getRequestBody();
+                     FileOutputStream out = new FileOutputStream(destFile)) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                    }
+                }
+
+                String msg = "Saved: " + destFile.getAbsolutePath();
+                Log.i(TAG, msg);
+                sendBytes(ex, 200, msg.getBytes(StandardCharsets.UTF_8), "text/plain");
+            } catch (Exception e) {
+                Log.e(TAG, "Upload failed", e);
+                sendBytes(ex, 500, ("error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8), "text/plain");
+            }
         }
     }
 
