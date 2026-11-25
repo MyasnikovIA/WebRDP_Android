@@ -28,7 +28,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_PROJ = 101;
     private static final int REQ_PERM = 102;
 
-    private EditText etHttpPort, etSignalPort, etStunPort, etUser, etPass;
+    private EditText etHttpPort, etStunPort, etUser, etPass;
     private CheckBox cbAutostart;
     private TextView tvAccStatus, tvOverlayStatus;
     private SettingsManager settings;
@@ -40,7 +40,6 @@ public class MainActivity extends AppCompatActivity {
         settings = new SettingsManager(this);
 
         etHttpPort    = findViewById(R.id.etHttpPort);
-        etSignalPort  = findViewById(R.id.etSignalPort);
         etStunPort    = findViewById(R.id.etStunPort);
         etUser        = findViewById(R.id.etUser);
         etPass        = findViewById(R.id.etPass);
@@ -51,6 +50,8 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnEnableAccessibility = findViewById(R.id.btnEnableAccessibility);
         Button btnOverlayPermission = findViewById(R.id.btnOverlayPermission);
+        Button btnBatteryOptimization = findViewById(R.id.btnBatteryOptimization);
+        Button btnAppInfo = findViewById(R.id.btnAppInfo);
         Button btnSystemSettings = findViewById(R.id.btnSystemSettings);
 
         loadSettings();
@@ -75,26 +76,44 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // Запрос на игнорирование оптимизации батареи
+        btnBatteryOptimization.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Intent intent = new Intent();
+                intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                try {
+                    startActivity(intent);
+                } catch (Exception e) {
+                    toast("Не удалось открыть настройки батареи");
+                }
+            }
+        });
+
+        // Переход в App Info (там часто находится переключатель "Автозапуск" на TV-боксах)
+        btnAppInfo.setOnClickListener(v -> {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            try {
+                startActivity(intent);
+            } catch (Exception e) {
+                toast("Не удалось открыть настройки приложения");
+            }
+        });
+
         btnSystemSettings.setOnClickListener(v -> {
             Intent tvSettingsIntent = new Intent("android.settings.TV_SETTINGS");
             tvSettingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try {
                 startActivity(tvSettingsIntent);
             } catch (Exception e) {
-                Intent universalIntent = new Intent(Settings.ACTION_SETTINGS);
-                universalIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                try {
-                    startActivity(universalIntent);
-                } catch (Exception ex) {
-                    toast("Не удалось открыть настройки Android");
-                }
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
             }
         });
 
         Button btnSave   = findViewById(R.id.btnSave);
         Button btnStart  = findViewById(R.id.btnStart);
         Button btnStop   = findViewById(R.id.btnStop);
-        Button btnRestart= findViewById(R.id.btnRestart);
 
         btnSave.setOnClickListener(v -> { saveSettings(); toast("Настройки сохранены"); });
         btnStart.setOnClickListener(v -> requestProjection());
@@ -103,13 +122,6 @@ public class MainActivity extends AppCompatActivity {
                     .setAction(ScreenStreamService.ACTION_STOP);
             startService(i);
             toast("Сервис остановлен");
-        });
-        btnRestart.setOnClickListener(v -> {
-            saveSettings();
-            Intent i = new Intent(this, ScreenStreamService.class)
-                    .setAction(ScreenStreamService.ACTION_RESTART);
-            startService(i);
-            toast("Сервис перезапущен с новыми настройками");
         });
     }
 
@@ -167,7 +179,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void loadSettings() {
         etHttpPort.setText(String.valueOf(settings.getHttpPort()));
-        etSignalPort.setText(String.valueOf(settings.getSignalPort()));
         etStunPort.setText(String.valueOf(settings.getStunPort()));
         etUser.setText(settings.getUsername());
         etPass.setText(settings.getPassword());
@@ -176,14 +187,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveSettings() {
         int hp = parseIntSafe(etHttpPort.getText().toString(), 8085);
-        int sp = parseIntSafe(etSignalPort.getText().toString(), 8086);
         int stp = parseIntSafe(etStunPort.getText().toString(), 3478);
         String u = etUser.getText().toString().trim();
         String p = etPass.getText().toString();
         if (TextUtils.isEmpty(u)) u = "admin";
         if (TextUtils.isEmpty(p)) p = "admin";
         settings.setHttpPort(hp);
-        settings.setSignalPort(sp);
         settings.setStunPort(stp);
         settings.setUsername(u);
         settings.setPassword(p);
