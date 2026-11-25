@@ -79,7 +79,7 @@
     if (iceInterval) clearInterval(iceInterval);
     if (dc) { dc.close(); dc = null; }
     if (pc) { pc.close(); pc = null; }
-    
+
     if (baseUrl !== null && currentClientId) {
       fetch(`${baseUrl}/api/reset?clientId=${currentClientId}`, {
         method: 'POST',
@@ -90,7 +90,7 @@
     video.srcObject = null;
     if (status) status.textContent = 'Отключено';
     log('');
-    
+
     if (isRemoteMode) {
       wrap.style.display = 'none';
       loginScreen.style.display = 'flex';
@@ -139,6 +139,31 @@
     pc.ontrack = (e) => {
       if (e.streams && e.streams[0]) {
         video.srcObject = e.streams[0];
+        video.muted = false;
+
+        // Обработка блокировки автовоспроизведения со звуком
+        let playPromise = video.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(error => {
+                console.log("Autoplay block: ", error);
+                // Если браузер заблокировал, включаем без звука, чтобы было видео
+                video.muted = true;
+                video.play().catch(e => console.error("Muted autoplay failed", e));
+
+                // Добавляем слушатели на первое взаимодействие для включения звука
+                const unmute = () => {
+                    video.muted = false;
+                    video.play().catch(e => console.error(e));
+                    document.removeEventListener('click', unmute);
+                    document.removeEventListener('keydown', unmute);
+                    document.removeEventListener('touchstart', unmute);
+                };
+                document.addEventListener('click', unmute);
+                document.addEventListener('keydown', unmute);
+                document.addEventListener('touchstart', unmute);
+            });
+        }
+
         if (status) status.textContent = 'Трансляция активна';
       }
     };
@@ -167,7 +192,6 @@
             a.download = msg.filename;
             document.body.appendChild(a);
             a.click();
-            // Даем браузеру время начать скачивание, прежде чем удалить элемент
             setTimeout(() => {
               document.body.removeChild(a);
               URL.revokeObjectURL(a.href);
@@ -182,6 +206,7 @@
     };
 
     pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);

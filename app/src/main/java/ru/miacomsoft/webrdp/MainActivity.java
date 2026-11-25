@@ -20,6 +20,9 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQ_PROJ = 101;
@@ -75,7 +78,6 @@ public class MainActivity extends AppCompatActivity {
         btnSystemSettings.setOnClickListener(v -> {
             Intent tvSettingsIntent = new Intent("android.settings.TV_SETTINGS");
             tvSettingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
             try {
                 startActivity(tvSettingsIntent);
             } catch (Exception e) {
@@ -147,18 +149,26 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void requestRuntimePermissions() {
+        List<String> perms = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_PERM);
+            perms.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.RECORD_AUDIO);
+        }
+
+        if (!perms.isEmpty()) {
+            ActivityCompat.requestPermissions(this, perms.toArray(new String[0]), REQ_PERM);
         }
     }
 
     private void loadSettings() {
         etHttpPort.setText(String.valueOf(settings.getHttpPort()));
         etSignalPort.setText(String.valueOf(settings.getSignalPort()));
-        etStunPort.setText(String.valueOf(settings.getStunPort())); // Загрузка STUN
+        etStunPort.setText(String.valueOf(settings.getStunPort()));
         etUser.setText(settings.getUsername());
         etPass.setText(settings.getPassword());
         cbAutostart.setChecked(settings.isAutostart());
@@ -167,7 +177,7 @@ public class MainActivity extends AppCompatActivity {
     private void saveSettings() {
         int hp = parseIntSafe(etHttpPort.getText().toString(), 8085);
         int sp = parseIntSafe(etSignalPort.getText().toString(), 8086);
-        int stp = parseIntSafe(etStunPort.getText().toString(), 3478); // Сохранение STUN
+        int stp = parseIntSafe(etStunPort.getText().toString(), 3478);
         String u = etUser.getText().toString().trim();
         String p = etPass.getText().toString();
         if (TextUtils.isEmpty(u)) u = "admin";

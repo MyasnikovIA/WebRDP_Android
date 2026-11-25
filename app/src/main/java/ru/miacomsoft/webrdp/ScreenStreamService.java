@@ -16,11 +16,14 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
+import org.webrtc.AudioSource;
+import org.webrtc.AudioTrack;
 import org.webrtc.DataChannel;
 import org.webrtc.DefaultVideoDecoderFactory;
 import org.webrtc.DefaultVideoEncoderFactory;
 import org.webrtc.EglBase;
 import org.webrtc.IceCandidate;
+import org.webrtc.MediaConstraints;
 import org.webrtc.MediaStream;
 import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
@@ -31,6 +34,7 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.VideoCapturer;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
+import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -63,6 +67,8 @@ public class ScreenStreamService extends Service {
     private SurfaceTextureHelper surfaceHelper;
     private VideoSource videoSource;
     private VideoTrack videoTrack;
+    private AudioSource audioSource;
+    private AudioTrack audioTrack;
 
     public class ClientSession {
         public String id;
@@ -94,9 +100,6 @@ public class ScreenStreamService extends Service {
 
         boolean hasProjection = intent != null && intent.hasExtra(EXTRA_RESULT_DATA);
 
-        // ВАЖНО: Если проекция уже запущена (videoTrack != null), мы обязаны
-        // передавать тип MEDIA_PROJECTION в startForeground, иначе Android
-        // остановит трансляцию экрана!
         int fgType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
         if ((hasProjection || videoTrack != null) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             fgType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
@@ -143,23 +146,16 @@ public class ScreenStreamService extends Service {
                     session.dataChannel.send(buffer);
                 }
             }
-            Log.i(TAG, "Broadcasted download for: " + filename);
         } catch (Exception e) { Log.e(TAG, "broadcast error", e); }
     }
 
     private void startProjection(int resultCode, Intent data) {
-        if (videoTrack != null) {
-            Log.w(TAG, "Projection already running, ignoring start request.");
-            return;
-        }
+        if (videoTrack != null) return;
 
         try {
             MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
             mediaProjection = mpm.getMediaProjection(resultCode, data);
-            if (mediaProjection == null) { Log.e(TAG, "mediaProjection == null"); return; }
-            mediaProjection.registerCallback(new MediaProjection.Callback() {
-                @Override public void onStop() { Log.w(TAG, "MediaProjection stopped"); }
-            }, null);
+            if (mediaProjection == null) return;
 
             capturer = new ScreenCapturerAndroid(data, new MediaProjection.Callback() {
                 @Override public void onStop() { Log.w(TAG, "ScreenCapturer stopped"); }
@@ -181,10 +177,22 @@ public class ScreenStreamService extends Service {
                 .setEnableInternalTracer(false).createInitializationOptions();
         PeerConnectionFactory.initialize(init);
         eglBase = EglBase.create();
+
+        // ИНИЦИАЛИЗАЦИЯ ЗВУКОВОГО МОДУЛЯ
+        JavaAudioDeviceModule adm = JavaAudioDeviceModule.builder(this)
+                .setUseHardwareAcousticEchoCanceler(true)
+                .setUseHardwareNoiseSuppressor(true)
+                .createAudioDeviceModule();
+
         pcFactory = PeerConnectionFactory.builder()
+                .setAudioDeviceModule(adm)
                 .setVideoEncoderFactory(new DefaultVideoEncoderFactory(eglBase.getEglBaseContext(), true, true))
                 .setVideoDecoderFactory(new DefaultVideoDecoderFactory(eglBase.getEglBaseContext()))
                 .createPeerConnectionFactory();
+
+        // СОЗДАНИЕ АУДИОДОРОЖКИ
+        audioSource = pcFactory.createAudioSource(new MediaConstraints());
+        audioTrack = pcFactory.createAudioTrack("audio0", audioSource);
     }
 
     private PeerConnection createPeerConnectionForClient(final String clientId) {
@@ -196,7 +204,6 @@ public class ScreenStreamService extends Service {
         PeerConnection pc = pcFactory.createPeerConnection(cfg, new PeerConnection.Observer() {
             @Override public void onSignalingChange(PeerConnection.SignalingState s) {}
             @Override public void onIceConnectionChange(PeerConnection.IceConnectionState s) {
-                Log.d(TAG, "Client " + clientId + " ICE state: " + s);
                 if (s == PeerConnection.IceConnectionState.FAILED || s == PeerConnection.IceConnectionState.CLOSED) {
                     removeClient(clientId);
                 }
@@ -223,9 +230,7 @@ public class ScreenStreamService extends Service {
                             byte[] bytes = new byte[data.remaining()];
                             data.get(bytes);
                             RemoteControlAccessibilityService.handleMessage(new String(bytes, "UTF-8"));
-                        } catch (Exception e) {
-                            Log.e(TAG, "DataChannel msg error", e);
-                        }
+                        } catch (Exception e) {}
                     }
                 });
             }
@@ -233,19 +238,22 @@ public class ScreenStreamService extends Service {
             @Override public void onAddTrack(RtpReceiver r, MediaStream[] streams) {}
         });
 
-        if (pc != null && videoTrack != null) {
-            pc.addTrack(videoTrack, Collections.singletonList("screen"));
+        if (pc != null) {
+            if (videoTrack != null) {
+                pc.addTrack(videoTrack, Collections.singletonList("stream_id"));
+            }
+            if (audioTrack != null) {
+                // ДОБАВЛЯЕМ ЗВУК
+                pc.addTrack(audioTrack, Collections.singletonList("stream_id"));
+            }
         }
         return pc;
     }
 
     public String handleOffer(String offerSdp, String clientId) throws Exception {
+        // ... (код без изменений) ...
         final long TIMEOUT_MS = 5000;
-
-        if (videoTrack == null) {
-            throw new IllegalStateException("Projection not started. Press 'Start' on the device.");
-        }
-
+        if (videoTrack == null) throw new IllegalStateException("Projection not started.");
         removeClient(clientId);
 
         final PeerConnection pc = createPeerConnectionForClient(clientId);
@@ -256,8 +264,7 @@ public class ScreenStreamService extends Service {
         clients.put(clientId, session);
 
         final java.util.concurrent.CountDownLatch remoteLatch = new java.util.concurrent.CountDownLatch(1);
-        final java.util.concurrent.atomic.AtomicReference<String> remoteErr =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicReference<String> remoteErr = new java.util.concurrent.atomic.AtomicReference<>();
 
         pc.setRemoteDescription(new org.webrtc.SdpObserver() {
             @Override public void onCreateSuccess(SessionDescription s) {}
@@ -266,19 +273,14 @@ public class ScreenStreamService extends Service {
             @Override public void onSetFailure(String s)     { remoteErr.set(s); remoteLatch.countDown(); }
         }, new SessionDescription(SessionDescription.Type.OFFER, offerSdp));
 
-        if (!remoteLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+        if (!remoteLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) || remoteErr.get() != null) {
             removeClient(clientId);
-            throw new IllegalStateException("setRemoteDescription timeout");
-        }
-        if (remoteErr.get() != null) {
-            removeClient(clientId);
-            throw new IllegalStateException("setRemoteDescription failed: " + remoteErr.get());
+            throw new IllegalStateException("setRemoteDescription failed");
         }
 
         final java.util.concurrent.CountDownLatch answerLatch = new java.util.concurrent.CountDownLatch(1);
         final SessionDescription[] answerHolder = new SessionDescription[1];
-        final java.util.concurrent.atomic.AtomicReference<String> answerErr =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicReference<String> answerErr = new java.util.concurrent.atomic.AtomicReference<>();
 
         pc.createAnswer(new org.webrtc.SdpObserver() {
             @Override public void onCreateSuccess(SessionDescription sdp) {
@@ -295,22 +297,12 @@ public class ScreenStreamService extends Service {
             @Override public void onSetFailure(String s)     { answerErr.set(s); answerLatch.countDown(); }
         }, new org.webrtc.MediaConstraints());
 
-        if (!answerLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+        if (!answerLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) || answerErr.get() != null) {
             removeClient(clientId);
-            throw new IllegalStateException("createAnswer timeout");
-        }
-        if (answerErr.get() != null) {
-            removeClient(clientId);
-            throw new IllegalStateException("createAnswer failed: " + answerErr.get());
-        }
-        if (answerHolder[0] == null) {
-            removeClient(clientId);
-            throw new IllegalStateException("answer SDP is null");
+            throw new IllegalStateException("createAnswer failed");
         }
 
         try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-
-        Log.i(TAG, "Client " + clientId + " connected. Total clients: " + clients.size());
         return answerHolder[0].description;
     }
 
@@ -335,14 +327,11 @@ public class ScreenStreamService extends Service {
         ClientSession session = clients.remove(clientId);
         if (session != null && session.pc != null) {
             try { session.pc.close(); } catch (Exception ignored) {}
-            Log.i(TAG, "Client " + clientId + " disconnected. Total clients: " + clients.size());
         }
     }
 
     public void resetAllConnections() {
-        for (String id : new ArrayList<>(clients.keySet())) {
-            removeClient(id);
-        }
+        for (String id : new ArrayList<>(clients.keySet())) removeClient(id);
     }
 
     private void startHttpServer() {
@@ -350,10 +339,7 @@ public class ScreenStreamService extends Service {
         try {
             httpServer = new SignalingServer(this, settings);
             httpServer.start();
-            Log.i(TAG, "HTTP server started on " + settings.getHttpPort());
-        } catch (Exception e) {
-            Log.e(TAG, "HTTP start failed", e);
-        }
+        } catch (Exception e) {}
     }
 
     private void stopHttpServer() {
@@ -365,16 +351,11 @@ public class ScreenStreamService extends Service {
         try {
             stunServer = new StunServer(settings.getStunPort());
             stunServer.startServer();
-        } catch (Exception e) {
-            Log.e(TAG, "STUN start failed", e);
-        }
+        } catch (Exception e) {}
     }
 
     private void stopStunServer() {
-        if (stunServer != null) {
-            stunServer.stopServer();
-            stunServer = null;
-        }
+        if (stunServer != null) { stunServer.stopServer(); stunServer = null; }
     }
 
     private void stopAll() {
@@ -384,6 +365,8 @@ public class ScreenStreamService extends Service {
         try { if (capturer != null) capturer.dispose(); } catch (Exception ignored) {}
         if (videoTrack != null) videoTrack.dispose();
         if (videoSource != null) videoSource.dispose();
+        if (audioTrack != null) audioTrack.dispose();
+        if (audioSource != null) audioSource.dispose();
         if (mediaProjection != null) mediaProjection.stop();
         if (surfaceHelper != null) surfaceHelper.dispose();
         try { stopForeground(true); } catch (Exception ignored) {}
