@@ -14,7 +14,7 @@
   const status = document.getElementById('status');
   const logEl = document.getElementById('log');
   const dropZone = document.getElementById('drop-zone');
-  const log = (s) => { logEl.textContent = s; };
+  const log = (s) => { if (logEl) logEl.textContent = s; };
 
   let pc, dc;
   let baseUrl = '';
@@ -22,76 +22,96 @@
   let iceInterval = null;
   let currentClientId = '';
 
-  // Восстановление настроек
-  inpIp.value = localStorage.getItem('rdp_ip') || '192.168.1.100';
-  inpPort.value = localStorage.getItem('rdp_port') || '8085';
-  inpUser.value = localStorage.getItem('rdp_user') || 'admin';
-  inpPass.value = localStorage.getItem('rdp_pass') || '';
+  const isRemoteMode = loginScreen !== null;
 
-  btnConnect.addEventListener('click', async () => {
-    const ip = inpIp.value.trim();
-    const port = inpPort.value.trim();
-    const user = inpUser.value.trim();
-    const pass = inpPass.value;
+  if (isRemoteMode) {
+    inpIp.value = localStorage.getItem('rdp_ip') || '192.168.1.100';
+    inpPort.value = localStorage.getItem('rdp_port') || '8085';
+    inpUser.value = localStorage.getItem('rdp_user') || 'admin';
+    inpPass.value = localStorage.getItem('rdp_pass') || '';
 
-    if (!ip || !port) { showError('Укажите IP и порт'); return; }
+    btnConnect.addEventListener('click', async () => {
+      const ip = inpIp.value.trim();
+      const port = inpPort.value.trim();
+      const user = inpUser.value.trim();
+      const pass = inpPass.value;
 
-    localStorage.setItem('rdp_ip', ip);
-    localStorage.setItem('rdp_port', port);
-    localStorage.setItem('rdp_user', user);
-    localStorage.setItem('rdp_pass', pass);
+      if (!ip || !port) { showError('Укажите IP и порт'); return; }
 
-    baseUrl = `http://${ip}:${port}`;
-    authHeader = 'Basic ' + btoa(user + ':' + pass);
-    // Генерируем уникальный ID для этого клиента
-    currentClientId = 'client_' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('rdp_ip', ip);
+      localStorage.setItem('rdp_port', port);
+      localStorage.setItem('rdp_user', user);
+      localStorage.setItem('rdp_pass', pass);
 
-    loginError.style.display = 'none';
-    btnConnect.textContent = 'Подключение...';
+      baseUrl = `http://${ip}:${port}`;
+      authHeader = 'Basic ' + btoa(user + ':' + pass);
+      currentClientId = 'client_' + Math.random().toString(36).substr(2, 9);
 
-    try {
-      await startConnection();
-      loginScreen.style.display = 'none';
-      wrap.style.display = 'block';
-      wrap.focus();
-    } catch (e) {
-      showError(e.message);
-      btnConnect.textContent = 'Подключиться';
-    }
-  });
+      loginError.style.display = 'none';
+      btnConnect.textContent = 'Подключение...';
 
-  btnDisconnect.addEventListener('click', () => disconnect());
+      try {
+        await startConnection();
+        loginScreen.style.display = 'none';
+        wrap.style.display = 'block';
+        wrap.focus();
+      } catch (e) {
+        showError(e.message);
+        btnConnect.textContent = 'Подключиться';
+      }
+    });
+  } else {
+    baseUrl = ''; 
+    currentClientId = 'local_' + Math.random().toString(36).substr(2, 9);
+    if (wrap) wrap.style.display = 'block';
+    
+    startConnection().catch(e => {
+        if (status) status.textContent = 'Ошибка: ' + e.message;
+        console.error(e);
+    });
+  }
+
+  if (btnDisconnect) {
+    btnDisconnect.addEventListener('click', () => disconnect());
+  }
 
   function disconnect() {
     if (iceInterval) clearInterval(iceInterval);
     if (dc) { dc.close(); dc = null; }
     if (pc) { pc.close(); pc = null; }
     
-    // Сообщаем серверу, что мы ушли
-    if (baseUrl && authHeader && currentClientId) {
+    if (baseUrl !== null && currentClientId) {
       fetch(`${baseUrl}/api/reset?clientId=${currentClientId}`, {
         method: 'POST',
-        headers: { 'Authorization': authHeader }
+        headers: authHeader ? { 'Authorization': authHeader } : {}
       }).catch(() => {});
     }
 
     video.srcObject = null;
-    status.textContent = 'Отключено';
+    if (status) status.textContent = 'Отключено';
     log('');
     
-    wrap.style.display = 'none';
-    loginScreen.style.display = 'flex';
-    btnConnect.textContent = 'Подключиться';
+    if (isRemoteMode) {
+      wrap.style.display = 'none';
+      loginScreen.style.display = 'flex';
+      btnConnect.textContent = 'Подключиться';
+    }
   }
 
   function showError(msg) {
-    loginError.textContent = msg;
-    loginError.style.display = 'block';
+    if (loginError) {
+      loginError.textContent = msg;
+      loginError.style.display = 'block';
+    } else {
+      console.error(msg);
+    }
   }
 
   async function fetchAuth(url, options = {}) {
-    if (!options.headers) options.headers = {};
-    options.headers['Authorization'] = authHeader;
+    if (authHeader) {
+      if (!options.headers) options.headers = {};
+      options.headers['Authorization'] = authHeader;
+    }
     return fetch(url, options);
   }
 
@@ -108,9 +128,9 @@
       throw new Error('Не удалось связаться с устройством: ' + e.message);
     }
 
-    const host = new URL(baseUrl).hostname;
+    const host = baseUrl ? new URL(baseUrl).hostname : window.location.hostname;
     const stunUrl = `stun:${host}:${stunPort}`;
-    log(`Используем STUN: ${stunUrl}`);
+    log(`STUN: ${stunUrl}`);
 
     pc = new RTCPeerConnection({
       iceServers: [{ urls: stunUrl }]
@@ -119,22 +139,21 @@
     pc.ontrack = (e) => {
       if (e.streams && e.streams[0]) {
         video.srcObject = e.streams[0];
-        status.textContent = 'Трансляция активна';
+        if (status) status.textContent = 'Трансляция активна';
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      status.textContent = 'ICE: ' + pc.iceConnectionState;
+      if (status) status.textContent = 'ICE: ' + pc.iceConnectionState;
       if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
         disconnect();
       }
     };
 
     dc = pc.createDataChannel('control');
-    dc.onopen = () => log('DataChannel открыт (Управление доступно)');
+    dc.onopen = () => log('DataChannel открыт');
     dc.onclose = () => log('DataChannel закрыт');
 
-    // --- НОВЫЙ БЛОК: Обработка команды на скачивание файла с Android ---
     dc.onmessage = async (e) => {
       try {
         const msg = JSON.parse(e.data);
@@ -146,50 +165,49 @@
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = msg.filename;
-            document.body.appendChild(a); // Требуется для некоторых браузеров
+            document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(a.href);
+            // Даем браузеру время начать скачивание, прежде чем удалить элемент
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(a.href);
+            }, 100);
           } else {
             log('Ошибка скачивания: ' + res.status);
           }
         }
       } catch (err) {
-        // Игнорируем сообщения, которые не являются JSON
+        console.error(err);
       }
     };
-    // -------------------------------------------------------------------
 
     pc.addTransceiver('video', { direction: 'recvonly' });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    // Передаем clientId в URL
     const r = await fetchAuth(`${baseUrl}/api/offer?clientId=${currentClientId}`, {
       method: 'POST',
       body: offer.sdp,
       headers: { 'Content-Type': 'application/sdp' }
     });
-
+    
     if (!r.ok) throw new Error('Ошибка сигналинга: ' + r.status);
-
+    
     const answerSdp = await r.text();
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
-    // Запрашиваем ICE с нашим clientId
     iceInterval = setInterval(async () => {
       try {
         const rr = await fetchAuth(`${baseUrl}/api/ice?clientId=${currentClientId}`);
         if (!rr.ok) return;
         const arr = await rr.json();
         for (const c of arr) {
-          try { await pc.addIceCandidate(c); } catch (e) { /* ignore */ }
+          try { await pc.addIceCandidate(c); } catch (e) {}
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
     }, 1000);
 
-    // Отправляем свои ICE с нашим clientId
     pc.onicecandidate = async (e) => {
       if (!e.candidate) return;
       try {
@@ -202,11 +220,10 @@
             candidate: e.candidate.candidate
           })
         });
-      } catch (err) { /* ignore */ }
+      } catch (err) {}
     };
   }
 
-  // --- Управление ---
   function getNormalizedCoords(e) {
     const rect = video.getBoundingClientRect();
     const vWidth = video.videoWidth;
@@ -238,64 +255,66 @@
   let startCoords = null;
   let isSwiping = false;
 
-  video.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    if (e.button === 2) { sendControl({ t: 'back' }); return; }
-    if (e.button === 0) {
-      const coords = getNormalizedCoords(e);
-      if (coords) {
-        startCoords = coords;
-        isSwiping = false;
-        pressTimer = setTimeout(() => {
-          if (!isSwiping && startCoords) {
-            sendControl({ t: 'longpress', x: startCoords.x, y: startCoords.y, ms: 800 });
-            startCoords = null;
-          }
-        }, 600);
-      }
-    }
-  });
-
-  video.addEventListener('mousemove', (e) => {
-    e.preventDefault();
-    if (!startCoords) return;
-    const coords = getNormalizedCoords(e);
-    if (!coords) return;
-    const dx = coords.x - startCoords.x;
-    const dy = coords.y - startCoords.y;
-    if (Math.sqrt(dx*dx + dy*dy) > 0.03) {
-      isSwiping = true;
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    }
-  });
-
-  video.addEventListener('mouseup', (e) => {
-    e.preventDefault();
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    if (e.button === 0 && startCoords) {
-      const endCoords = getNormalizedCoords(e);
-      if (endCoords) {
-        if (isSwiping) {
-          sendControl({ t: 'swipe', x1: startCoords.x, y1: startCoords.y, x2: endCoords.x, y2: endCoords.y, ms: 300 });
-        } else {
-          sendControl({ t: 'tap', x: endCoords.x, y: endCoords.y });
+  if (video) {
+    video.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      if (e.button === 2) { sendControl({ t: 'back' }); return; }
+      if (e.button === 0) {
+        const coords = getNormalizedCoords(e);
+        if (coords) {
+          startCoords = coords;
+          isSwiping = false;
+          pressTimer = setTimeout(() => {
+            if (!isSwiping && startCoords) {
+              sendControl({ t: 'longpress', x: startCoords.x, y: startCoords.y, ms: 800 });
+              startCoords = null;
+            }
+          }, 600);
         }
       }
-      startCoords = null;
-    }
-  });
+    });
 
-  let lastScrollTime = 0;
-  video.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const now = Date.now();
-    if (now - lastScrollTime < 80) return;
-    lastScrollTime = now;
-    const coords = getNormalizedCoords(e);
-    if (coords) sendControl({ t: 'scroll', x: coords.x, y: coords.y, deltaY: e.deltaY });
-  }, { passive: false });
+    video.addEventListener('mousemove', (e) => {
+      e.preventDefault();
+      if (!startCoords) return;
+      const coords = getNormalizedCoords(e);
+      if (!coords) return;
+      const dx = coords.x - startCoords.x;
+      const dy = coords.y - startCoords.y;
+      if (Math.sqrt(dx*dx + dy*dy) > 0.03) {
+        isSwiping = true;
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      }
+    });
 
-  video.addEventListener('contextmenu', (e) => e.preventDefault());
+    video.addEventListener('mouseup', (e) => {
+      e.preventDefault();
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (e.button === 0 && startCoords) {
+        const endCoords = getNormalizedCoords(e);
+        if (endCoords) {
+          if (isSwiping) {
+            sendControl({ t: 'swipe', x1: startCoords.x, y1: startCoords.y, x2: endCoords.x, y2: endCoords.y, ms: 300 });
+          } else {
+            sendControl({ t: 'tap', x: endCoords.x, y: endCoords.y });
+          }
+        }
+        startCoords = null;
+      }
+    });
+
+    let lastScrollTime = 0;
+    video.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lastScrollTime < 80) return;
+      lastScrollTime = now;
+      const coords = getNormalizedCoords(e);
+      if (coords) sendControl({ t: 'scroll', x: coords.x, y: coords.y, deltaY: e.deltaY });
+    }, { passive: false });
+
+    video.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
   document.addEventListener('keydown', (e) => {
     if (['F5', 'F12', 'F11'].includes(e.key)) return;
@@ -315,37 +334,38 @@
     if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj));
   }
 
-  // --- Drag and Drop (Загрузка файлов на Android) ---
-  window.addEventListener('dragenter', (e) => {
-    e.preventDefault();
-    if (wrap.style.display !== 'none') dropZone.style.display = 'flex';
-  });
-  window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('dragleave', (e) => {
-    e.preventDefault();
-    if (e.relatedTarget === null || e.relatedTarget.id === 'wrap' || e.clientX === 0) dropZone.style.display = 'none';
-  });
-  window.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    dropZone.style.display = 'none';
-    const files = e.dataTransfer.files;
-    if (files.length === 0) return;
+  if (dropZone) {
+    window.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      if (wrap.style.display !== 'none') dropZone.style.display = 'flex';
+    });
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      if (e.relatedTarget === null || e.relatedTarget.id === 'wrap' || e.clientX === 0) dropZone.style.display = 'none';
+    });
+    window.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.style.display = 'none';
+      const files = e.dataTransfer.files;
+      if (files.length === 0) return;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      status.textContent = `Загрузка: ${file.name}...`;
-      try {
-        const res = await fetchAuth(`${baseUrl}/api/upload?name=${encodeURIComponent(file.name)}`, {
-          method: 'POST',
-          body: file,
-          headers: { 'Content-Type': 'application/octet-stream' }
-        });
-        if (res.ok) log(`Файл ${file.name} сохранен`);
-        else log(`Ошибка загрузки ${file.name}: ${res.status}`);
-      } catch (err) {
-        log(`Сбой сети при загрузке ${file.name}`);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (status) status.textContent = `Загрузка: ${file.name}...`;
+        try {
+          const res = await fetchAuth(`${baseUrl}/api/upload?name=${encodeURIComponent(file.name)}`, {
+            method: 'POST',
+            body: file,
+            headers: { 'Content-Type': 'application/octet-stream' }
+          });
+          if (res.ok) log(`Файл ${file.name} сохранен`);
+          else log(`Ошибка загрузки ${file.name}: ${res.status}`);
+        } catch (err) {
+          log(`Сбой сети при загрузке ${file.name}`);
+        }
       }
-    }
-    status.textContent = 'Трансляция активна';
-  });
+      if (status) status.textContent = 'Трансляция активна';
+    });
+  }
 })();

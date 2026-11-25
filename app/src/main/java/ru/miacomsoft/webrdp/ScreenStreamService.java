@@ -94,10 +94,14 @@ public class ScreenStreamService extends Service {
 
         boolean hasProjection = intent != null && intent.hasExtra(EXTRA_RESULT_DATA);
 
+        // ВАЖНО: Если проекция уже запущена (videoTrack != null), мы обязаны
+        // передавать тип MEDIA_PROJECTION в startForeground, иначе Android
+        // остановит трансляцию экрана!
         int fgType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-        if (hasProjection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if ((hasProjection || videoTrack != null) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             fgType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
         }
+
         Notification n = buildNotification();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, n, fgType);
@@ -144,7 +148,6 @@ public class ScreenStreamService extends Service {
     }
 
     private void startProjection(int resultCode, Intent data) {
-        // Защита от повторного запуска, который ломает текущие соединения
         if (videoTrack != null) {
             Log.w(TAG, "Projection already running, ignoring start request.");
             return;

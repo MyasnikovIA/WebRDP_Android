@@ -4,7 +4,7 @@
   const loginError = document.getElementById('login-error');
   const btnConnect = document.getElementById('btn-connect');
   const btnDisconnect = document.getElementById('btn-disconnect');
-
+  
   const inpIp = document.getElementById('inp-ip');
   const inpPort = document.getElementById('inp-port');
   const inpUser = document.getElementById('inp-user');
@@ -22,11 +22,9 @@
   let iceInterval = null;
   let currentClientId = '';
 
-  // Проверяем, открыта ли страница на стороннем сервере (есть ли экран логина)
   const isRemoteMode = loginScreen !== null;
 
   if (isRemoteMode) {
-    // РЕЖИМ APACHE (Внешний сервер)
     inpIp.value = localStorage.getItem('rdp_ip') || '192.168.1.100';
     inpPort.value = localStorage.getItem('rdp_port') || '8085';
     inpUser.value = localStorage.getItem('rdp_user') || 'admin';
@@ -63,12 +61,10 @@
       }
     });
   } else {
-    // ЛОКАЛЬНЫЙ РЕЖИМ (Встроенный сервер Android)
-    baseUrl = ''; // Относительные пути (запросы пойдут на тот же IP)
+    baseUrl = ''; 
     currentClientId = 'local_' + Math.random().toString(36).substr(2, 9);
     if (wrap) wrap.style.display = 'block';
-
-    // Запускаем сразу
+    
     startConnection().catch(e => {
         if (status) status.textContent = 'Ошибка: ' + e.message;
         console.error(e);
@@ -83,7 +79,7 @@
     if (iceInterval) clearInterval(iceInterval);
     if (dc) { dc.close(); dc = null; }
     if (pc) { pc.close(); pc = null; }
-
+    
     if (baseUrl !== null && currentClientId) {
       fetch(`${baseUrl}/api/reset?clientId=${currentClientId}`, {
         method: 'POST',
@@ -94,7 +90,7 @@
     video.srcObject = null;
     if (status) status.textContent = 'Отключено';
     log('');
-
+    
     if (isRemoteMode) {
       wrap.style.display = 'none';
       loginScreen.style.display = 'flex';
@@ -132,7 +128,6 @@
       throw new Error('Не удалось связаться с устройством: ' + e.message);
     }
 
-    // Определяем хост для STUN. Если baseUrl пустой, берем текущий хост.
     const host = baseUrl ? new URL(baseUrl).hostname : window.location.hostname;
     const stunUrl = `stun:${host}:${stunPort}`;
     log(`STUN: ${stunUrl}`);
@@ -172,13 +167,18 @@
             a.download = msg.filename;
             document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(a.href);
+            // Даем браузеру время начать скачивание, прежде чем удалить элемент
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(a.href);
+            }, 100);
           } else {
             log('Ошибка скачивания: ' + res.status);
           }
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error(err);
+      }
     };
 
     pc.addTransceiver('video', { direction: 'recvonly' });
@@ -191,9 +191,9 @@
       body: offer.sdp,
       headers: { 'Content-Type': 'application/sdp' }
     });
-
+    
     if (!r.ok) throw new Error('Ошибка сигналинга: ' + r.status);
-
+    
     const answerSdp = await r.text();
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
