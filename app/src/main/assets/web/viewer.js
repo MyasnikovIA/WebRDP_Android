@@ -18,7 +18,6 @@
       }
     };
 
-    // Логируем ICE состояние для диагностики
     pc.oniceconnectionstatechange = () => {
       status.textContent = 'ICE: ' + pc.iceConnectionState;
     };
@@ -68,7 +67,6 @@
     };
   }
 
-  // --- Расчет координат ---
   function getNormalizedCoords(e) {
     const rect = video.getBoundingClientRect();
     const vWidth = video.videoWidth;
@@ -97,61 +95,58 @@
     return { x, y };
   }
 
-  // --- Обработка мыши (mousedown / mouseup) ---
   let pressTimer = null;
   let startCoords = null;
   let isSwiping = false;
 
   video.addEventListener('mousedown', (e) => {
-    // Правая кнопка мыши = "Назад" (Back)
+    e.preventDefault();
+
     if (e.button === 2) {
-      e.preventDefault();
       sendControl({ t: 'back' });
       return;
     }
 
-    if (e.button === 0) { // Левая кнопка
+    if (e.button === 0) {
       const coords = getNormalizedCoords(e);
       if (coords) {
         startCoords = coords;
         isSwiping = false;
 
-        // Таймер для долгого нажатия (контекстное меню)
         pressTimer = setTimeout(() => {
           if (!isSwiping && startCoords) {
             sendControl({ t: 'longpress', x: startCoords.x, y: startCoords.y, ms: 800 });
-            startCoords = null; // Сбрасываем, чтобы mouseup не отправил tap
+            startCoords = null;
           }
-        }, 500); // 500мс - стандартный порог долгого нажатия Android
+        }, 600);
       }
     }
   });
 
   video.addEventListener('mousemove', (e) => {
+    e.preventDefault();
     if (!startCoords) return;
     const coords = getNormalizedCoords(e);
     if (!coords) return;
 
-    // Если сдвинулись достаточно далеко - отменяем долгое нажатие и начинаем свайп
     const dx = coords.x - startCoords.x;
     const dy = coords.y - startCoords.y;
-    if (Math.sqrt(dx*dx + dy*dy) > 0.02) {
+    if (Math.sqrt(dx*dx + dy*dy) > 0.03) {
       isSwiping = true;
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
     }
   });
 
   video.addEventListener('mouseup', (e) => {
+    e.preventDefault();
     if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
 
     if (e.button === 0 && startCoords) {
       const endCoords = getNormalizedCoords(e);
       if (endCoords) {
         if (isSwiping) {
-          // Свайп
           sendControl({ t: 'swipe', x1: startCoords.x, y1: startCoords.y, x2: endCoords.x, y2: endCoords.y, ms: 300 });
         } else {
-          // Обычный клик (если longpress не сработал)
           sendControl({ t: 'tap', x: endCoords.x, y: endCoords.y });
         }
       }
@@ -159,10 +154,24 @@
     }
   });
 
-  // Блокируем стандартное контекстное меню браузера
+  // --- ПРОКРУТКА КОЛЕСИКОМ МЫШИ ---
+  let lastScrollTime = 0;
+  video.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const now = Date.now();
+    // Ограничиваем частоту до 12 раз в секунду, чтобы не флудить в DataChannel
+    if (now - lastScrollTime < 80) return;
+    lastScrollTime = now;
+
+    const coords = getNormalizedCoords(e);
+    if (coords) {
+      sendControl({ t: 'scroll', x: coords.x, y: coords.y, deltaY: e.deltaY });
+    }
+  }, { passive: false });
+  // ---------------------------------
+
   video.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // Обработка клавиатуры
   document.addEventListener('keydown', (e) => {
     if (['F5', 'F12', 'F11'].includes(e.key)) return;
     if (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') {

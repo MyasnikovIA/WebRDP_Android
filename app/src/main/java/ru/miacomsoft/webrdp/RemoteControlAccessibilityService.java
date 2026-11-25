@@ -25,7 +25,6 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
 
     @Override public void onDestroy() { instance = null; super.onDestroy(); }
 
-    // АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ЗАХВАТА ЭКРАНА
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
@@ -40,14 +39,9 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
     private void clickStartNow(AccessibilityNodeInfo node) {
         if (node == null) return;
 
-        // Ищем кнопку с текстом "Start now" или "Начать сейчас" (зависит от языка системы)
         List<AccessibilityNodeInfo> buttons = node.findAccessibilityNodeInfosByText("Start now");
-        if (buttons.isEmpty()) {
-            buttons = node.findAccessibilityNodeInfosByText("Начать сейчас");
-        }
-        if (buttons.isEmpty()) {
-            buttons = node.findAccessibilityNodeInfosByText("Начать");
-        }
+        if (buttons.isEmpty()) buttons = node.findAccessibilityNodeInfosByText("Начать сейчас");
+        if (buttons.isEmpty()) buttons = node.findAccessibilityNodeInfosByText("Начать");
 
         for (AccessibilityNodeInfo btn : buttons) {
             if (btn.isClickable()) {
@@ -57,7 +51,6 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
             }
         }
 
-        // Если кнопка не найдена, рекурсивно ищем во вложенных элементах
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
@@ -90,6 +83,9 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
                             normX(o.optDouble("x2")), normY(o.optDouble("y2")),
                             o.optLong("ms", 300));
                     break;
+                case "scroll":
+                    s.scroll(o.optDouble("x"), o.optDouble("y"), o.optDouble("deltaY"));
+                    break;
                 case "key":
                     s.handleKey(o.optString("key"));
                     break;
@@ -111,8 +107,10 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
 
     private void tap(float x, float y) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
-        Path p = new Path(); p.moveTo(x, y);
-        GestureDescription.StrokeDescription st = new GestureDescription.StrokeDescription(p, 0, 50);
+        Path p = new Path();
+        p.moveTo(x, y);
+        p.lineTo(x + 1, y + 1);
+        GestureDescription.StrokeDescription st = new GestureDescription.StrokeDescription(p, 0, 100);
         dispatchGesture(new GestureDescription.Builder().addStroke(st).build(), null, null);
     }
 
@@ -128,6 +126,26 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
         Path p = new Path(); p.moveTo(x1, y1); p.lineTo(x2, y2);
         GestureDescription.StrokeDescription st = new GestureDescription.StrokeDescription(p, 0, Math.max(50, ms));
         dispatchGesture(new GestureDescription.Builder().addStroke(st).build(), null, null);
+    }
+
+    // --- ЛОГИКА ПРОКРУТКИ ---
+    private void scroll(double nx, double ny, double deltaY) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+
+        // Определяем направление:
+        // deltaY > 0 (скролл вниз) -> свайп вверх (от ny+0.15 к ny-0.15)
+        // deltaY < 0 (скролл вверх) -> свайп вниз (от ny-0.15 к ny+0.15)
+        float startY = deltaY > 0 ? (float)(ny + 0.15) : (float)(ny - 0.15);
+        float endY   = deltaY > 0 ? (float)(ny - 0.15) : (float)(ny + 0.15);
+
+        // Не даем свайпу выйти за пределы экрана (оставляем отступы 5%)
+        if (startY < 0.05f) { endY += (0.05f - startY); startY = 0.05f; }
+        if (startY > 0.95f) { endY -= (startY - 0.95f); startY = 0.95f; }
+        if (endY < 0.05f) { startY += (0.05f - endY); endY = 0.05f; }
+        if (endY > 0.95f) { startY -= (endY - 0.95f); endY = 0.95f; }
+
+        // Выполняем быстрый свайп (80мс) для эффекта прокрутки
+        swipe(normX(nx), normY(startY), normX(nx), normY(endY), 80);
     }
 
     private void handleKey(String key) {
