@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">WebRDP</string>
+    <string name="svc_channel_name">WebRDP Service</string>
+    <string name="svc_channel_desc">Screen streaming and web server</string>
+    <string name="svc_notification_title">WebRDP активен</string>
+    <string name="svc_notification_text">Трансляция экрана и веб-сервер запущены</string>
+    <string name="accessibility_desc">Служба для удалённого управления устройством через WebRDP</string>
+
+    <!-- Новые строки для статуса -->
+    <string name="acc_status_on">Управление: ВКЛЮЧЕНО</string>
+    <string name="acc_status_off">Управление: ВЫКЛЮЧЕНО</string>
+    <string name="acc_btn_enable">Включить управление</string>
+    <string name="acc_btn_settings">Настройки управления</string>
+</resources>
