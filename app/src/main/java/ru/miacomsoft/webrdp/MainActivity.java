@@ -47,6 +47,7 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnEnableAccessibility = findViewById(R.id.btnEnableAccessibility);
         Button btnOverlayPermission = findViewById(R.id.btnOverlayPermission);
+        Button btnSystemSettings = findViewById(R.id.btnSystemSettings);
 
         loadSettings();
         requestRuntimePermissions();
@@ -69,6 +70,17 @@ public class MainActivity extends AppCompatActivity {
                 }
             } else {
                 toast("На вашей версии Android это разрешение не требуется");
+            }
+        });
+
+        // Кнопка открытия КОРНЕВЫХ настроек Android
+        btnSystemSettings.setOnClickListener(v -> {
+            try {
+                // Открываем главное меню настроек
+                Intent intent = new Intent(Settings.ACTION_SETTINGS);
+                startActivity(intent);
+            } catch (Exception e) {
+                toast("Не удалось открыть настройки Android");
             }
         });
 
