@@ -36,6 +36,8 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ScreenStreamService extends Service {
@@ -61,10 +63,15 @@ public class ScreenStreamService extends Service {
     private VideoSource videoSource;
     private VideoTrack videoTrack;
 
-    private final Object pcLock = new Object();
-    private PeerConnection peerConnection;
-    private final List<IceCandidate> pendingClientToServerIce = new CopyOnWriteArrayList<>();
-    private final List<IceCandidate> pendingServerToClientIce = new CopyOnWriteArrayList<>();
+    // Список клиентов (сессий)
+    public class ClientSession {
+        public String id;
+        public PeerConnection pc;
+        public List<IceCandidate> serverIce = new CopyOnWriteArrayList<>();
+        public ClientSession(String id) { this.id = id; }
+    }
+
+    private final Map<String, ClientSession> clients = new ConcurrentHashMap<>();
 
     @Override
     public void onCreate() {
@@ -148,74 +155,70 @@ public class ScreenStreamService extends Service {
                 .createPeerConnectionFactory();
     }
 
-    private PeerConnection ensurePeerConnection() {
-        synchronized (pcLock) {
-            if (peerConnection != null) return peerConnection;
+    // Создает новый PeerConnection для клиента
+    private PeerConnection createPeerConnectionForClient(final String clientId) {
+        List<PeerConnection.IceServer> ice = new ArrayList<>();
+        PeerConnection.RTCConfiguration cfg = new PeerConnection.RTCConfiguration(ice);
+        cfg.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
+        cfg.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
 
-            // ВАЖНО: Убираем STUN из Android-клиента, чтобы он не передавал
-            // ложный адрес 127.0.0.1. Он будет использовать только Host Candidates (свой реальный IP).
-            List<PeerConnection.IceServer> ice = new ArrayList<>();
-
-            PeerConnection.RTCConfiguration cfg = new PeerConnection.RTCConfiguration(ice);
-            cfg.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-            cfg.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
-
-            peerConnection = pcFactory.createPeerConnection(cfg, new PeerConnection.Observer() {
-                @Override public void onSignalingChange(PeerConnection.SignalingState s) {}
-                @Override public void onIceConnectionChange(PeerConnection.IceConnectionState s) {
-                    Log.d(TAG, "ICE state: " + s);
+        PeerConnection pc = pcFactory.createPeerConnection(cfg, new PeerConnection.Observer() {
+            @Override public void onSignalingChange(PeerConnection.SignalingState s) {}
+            @Override public void onIceConnectionChange(PeerConnection.IceConnectionState s) {
+                Log.d(TAG, "Client " + clientId + " ICE state: " + s);
+                if (s == PeerConnection.IceConnectionState.FAILED || s == PeerConnection.IceConnectionState.CLOSED) {
+                    removeClient(clientId);
                 }
-                @Override public void onIceConnectionReceivingChange(boolean b) {}
-                @Override public void onIceGatheringChange(PeerConnection.IceGatheringState s) {}
-                @Override public void onIceCandidate(IceCandidate c) {
-                    if (c != null) pendingServerToClientIce.add(c);
-                }
-                @Override public void onIceCandidatesRemoved(IceCandidate[] c) {}
-                @Override public void onAddStream(MediaStream s) {}
-                @Override public void onRemoveStream(MediaStream s) {}
-                @Override public void onDataChannel(DataChannel dc) {
-                    dc.registerObserver(new DataChannel.Observer() {
-                        @Override public void onBufferedAmountChange(long l) {}
-                        @Override public void onStateChange() {}
-                        @Override public void onMessage(DataChannel.Buffer buffer) {
-                            try {
-                                ByteBuffer data = buffer.data;
-                                byte[] bytes = new byte[data.remaining()];
-                                data.get(bytes);
-                                RemoteControlAccessibilityService.handleMessage(new String(bytes, "UTF-8"));
-                            } catch (Exception e) {
-                                Log.e(TAG, "DataChannel msg", e);
-                            }
-                        }
-                    });
-                }
-                @Override public void onRenegotiationNeeded() {}
-                @Override public void onAddTrack(RtpReceiver r, MediaStream[] streams) {}
-            });
-            if (peerConnection != null && videoTrack != null) {
-                peerConnection.addTrack(videoTrack, Collections.singletonList("screen"));
             }
-            return peerConnection;
+            @Override public void onIceConnectionReceivingChange(boolean b) {}
+            @Override public void onIceGatheringChange(PeerConnection.IceGatheringState s) {}
+            @Override public void onIceCandidate(IceCandidate c) {
+                ClientSession session = clients.get(clientId);
+                if (c != null && session != null) session.serverIce.add(c);
+            }
+            @Override public void onIceCandidatesRemoved(IceCandidate[] c) {}
+            @Override public void onAddStream(MediaStream s) {}
+            @Override public void onRemoveStream(MediaStream s) {}
+            @Override public void onDataChannel(DataChannel dc) {
+                dc.registerObserver(new DataChannel.Observer() {
+                    @Override public void onBufferedAmountChange(long l) {}
+                    @Override public void onStateChange() {}
+                    @Override public void onMessage(DataChannel.Buffer buffer) {
+                        try {
+                            ByteBuffer data = buffer.data;
+                            byte[] bytes = new byte[data.remaining()];
+                            data.get(bytes);
+                            // Любой клиент может управлять
+                            RemoteControlAccessibilityService.handleMessage(new String(bytes, "UTF-8"));
+                        } catch (Exception e) {
+                            Log.e(TAG, "DataChannel msg error", e);
+                        }
+                    }
+                });
+            }
+            @Override public void onRenegotiationNeeded() {}
+            @Override public void onAddTrack(RtpReceiver r, MediaStream[] streams) {}
+        });
+
+        if (pc != null && videoTrack != null) {
+            // Один видеотрек раздается всем клиентам
+            pc.addTrack(videoTrack, Collections.singletonList("screen"));
         }
+        return pc;
     }
 
-    public String handleOffer(String offerSdp) throws Exception {
+    public String handleOffer(String offerSdp, String clientId) throws Exception {
         final long TIMEOUT_MS = 5000;
 
-        synchronized (pcLock) {
-            if (peerConnection != null) {
-                PeerConnection.SignalingState st = peerConnection.signalingState();
-                if (st != PeerConnection.SignalingState.STABLE) {
-                    try { peerConnection.close(); } catch (Exception ignored) {}
-                    peerConnection = null;
-                }
-            }
-        }
-        pendingServerToClientIce.clear();
-        pendingClientToServerIce.clear();
+        // Удаляем старую сессию с таким же ID, если она зависла
+        removeClient(clientId);
 
-        final PeerConnection pc = ensurePeerConnection();
-        if (pc == null) throw new IllegalStateException("PeerConnection is null");
+        final PeerConnection pc = createPeerConnectionForClient(clientId);
+        if (pc == null) throw new IllegalStateException("Failed to create PeerConnection");
+
+        ClientSession session = new ClientSession(clientId);
+        session.pc = pc;
+        clients.put(clientId, session);
 
         final java.util.concurrent.CountDownLatch remoteLatch = new java.util.concurrent.CountDownLatch(1);
         final java.util.concurrent.atomic.AtomicReference<String> remoteErr =
@@ -229,9 +232,11 @@ public class ScreenStreamService extends Service {
         }, new SessionDescription(SessionDescription.Type.OFFER, offerSdp));
 
         if (!remoteLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            removeClient(clientId);
             throw new IllegalStateException("setRemoteDescription timeout");
         }
         if (remoteErr.get() != null) {
+            removeClient(clientId);
             throw new IllegalStateException("setRemoteDescription failed: " + remoteErr.get());
         }
 
@@ -256,40 +261,52 @@ public class ScreenStreamService extends Service {
         }, new org.webrtc.MediaConstraints());
 
         if (!answerLatch.await(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            removeClient(clientId);
             throw new IllegalStateException("createAnswer timeout");
         }
         if (answerErr.get() != null) {
+            removeClient(clientId);
             throw new IllegalStateException("createAnswer failed: " + answerErr.get());
         }
         if (answerHolder[0] == null) {
+            removeClient(clientId);
             throw new IllegalStateException("answer SDP is null");
         }
 
-        try { Thread.sleep(800); } catch (InterruptedException ignored) {}
+        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
-        Log.i(TAG, "handleOffer ok, answer len=" + answerHolder[0].description.length()
-                + ", pending ice=" + pendingServerToClientIce.size());
-
+        Log.i(TAG, "Client " + clientId + " connected. Total clients: " + clients.size());
         return answerHolder[0].description;
     }
 
-    public void addClientIce(String sdpMid, int sdpMLineIndex, String candidate) {
-        PeerConnection pc = ensurePeerConnection();
-        pc.addIceCandidate(new IceCandidate(sdpMid, sdpMLineIndex, candidate));
+    public void addClientIce(String clientId, String sdpMid, int sdpMLineIndex, String candidate) {
+        ClientSession session = clients.get(clientId);
+        if (session != null && session.pc != null) {
+            session.pc.addIceCandidate(new IceCandidate(sdpMid, sdpMLineIndex, candidate));
+        }
     }
 
-    public List<IceCandidate> drainServerIce() {
-        List<IceCandidate> copy = new ArrayList<>(pendingServerToClientIce);
-        pendingServerToClientIce.clear();
-        return copy;
+    public List<IceCandidate> drainServerIce(String clientId) {
+        ClientSession session = clients.get(clientId);
+        if (session != null) {
+            List<IceCandidate> copy = new ArrayList<>(session.serverIce);
+            session.serverIce.clear();
+            return copy;
+        }
+        return new ArrayList<>();
     }
 
-    public void resetPeerConnection() {
-        synchronized (pcLock) {
-            if (peerConnection != null) {
-                peerConnection.close();
-                peerConnection = null;
-            }
+    public void removeClient(String clientId) {
+        ClientSession session = clients.remove(clientId);
+        if (session != null && session.pc != null) {
+            try { session.pc.close(); } catch (Exception ignored) {}
+            Log.i(TAG, "Client " + clientId + " disconnected. Total clients: " + clients.size());
+        }
+    }
+
+    public void resetAllConnections() {
+        for (String id : new ArrayList<>(clients.keySet())) {
+            removeClient(id);
         }
     }
 
@@ -313,7 +330,6 @@ public class ScreenStreamService extends Service {
         try {
             stunServer = new StunServer(settings.getStunPort());
             stunServer.startServer();
-            Log.i(TAG, "STUN server started on " + settings.getStunPort());
         } catch (Exception e) {
             Log.e(TAG, "STUN start failed", e);
         }
@@ -328,7 +344,7 @@ public class ScreenStreamService extends Service {
 
     private void stopAll() {
         stopHttpServer();
-        resetPeerConnection();
+        resetAllConnections();
         try { if (capturer != null) capturer.stopCapture(); } catch (Exception ignored) {}
         try { if (capturer != null) capturer.dispose(); } catch (Exception ignored) {}
         if (videoTrack != null) videoTrack.dispose();

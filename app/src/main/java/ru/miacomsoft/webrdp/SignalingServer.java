@@ -45,19 +45,17 @@ public class SignalingServer {
 
         server.createContext("/", new UiHandler());
         server.createContext("/viewer.js", new FileHandler("web/viewer.js", "application/javascript"));
+        server.createContext("/api/config", new ConfigHandler());
         server.createContext("/api/offer", new OfferHandler());
         server.createContext("/api/ice", new IceHandler());
         server.createContext("/api/reset", new ResetHandler());
         server.createContext("/api/upload", new UploadHandler());
-        server.createContext("/api/config", new ConfigHandler()); // НОВЫЙ ЭНДПОИНТ
         server.start();
     }
 
     public void stop() {
         if (server != null) { server.stop(0); server = null; }
     }
-
-    // ================= helpers =================
 
     private boolean checkAuth(HttpExchange ex) {
         Headers h = ex.getRequestHeaders();
@@ -101,13 +99,21 @@ public class SignalingServer {
         return new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8);
     }
 
+    private String getQueryParam(String query, String key) {
+        if (query == null) return null;
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=");
+            if (pair.length > 1 && pair[0].equals(key)) {
+                try { return URLDecoder.decode(pair[1], "UTF-8"); } catch (Exception e) { return pair[1]; }
+            }
+        }
+        return null;
+    }
+
     private ScreenStreamService svc() {
         return ScreenStreamServiceHolder.get();
     }
 
-    // ================= handlers =================
-
-    // НОВЫЙ ОБРАБОТЧИК КОНФИГУРАЦИИ
     private class ConfigHandler implements HttpHandler {
         @Override public void handle(HttpExchange ex) throws IOException {
             cors(ex.getResponseHeaders());
@@ -164,11 +170,8 @@ public class SignalingServer {
             String query = ex.getRequestURI().getQuery();
             String filename = "uploaded_file_" + System.currentTimeMillis() + ".bin";
             if (query != null && query.startsWith("name=")) {
-                try {
-                    filename = URLDecoder.decode(query.substring(5), "UTF-8");
-                } catch (Exception ignored) {}
+                try { filename = URLDecoder.decode(query.substring(5), "UTF-8"); } catch (Exception ignored) {}
             }
-
             filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
 
             try {
@@ -176,20 +179,12 @@ public class SignalingServer {
                 if (!downloadDir.exists()) downloadDir.mkdirs();
                 File destFile = new File(downloadDir, filename);
 
-                try (InputStream in = ex.getRequestBody();
-                     FileOutputStream out = new FileOutputStream(destFile)) {
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = in.read(buf)) > 0) {
-                        out.write(buf, 0, n);
-                    }
+                try (InputStream in = ex.getRequestBody(); FileOutputStream out = new FileOutputStream(destFile)) {
+                    byte[] buf = new byte[8192]; int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 }
-
-                String msg = "Saved: " + destFile.getAbsolutePath();
-                Log.i(TAG, msg);
-                sendBytes(ex, 200, msg.getBytes(StandardCharsets.UTF_8), "text/plain");
+                sendBytes(ex, 200, ("Saved: " + destFile.getAbsolutePath()).getBytes(StandardCharsets.UTF_8), "text/plain");
             } catch (Exception e) {
-                Log.e(TAG, "Upload failed", e);
                 sendBytes(ex, 500, ("error: " + e.getMessage()).getBytes(StandardCharsets.UTF_8), "text/plain");
             }
         }
@@ -201,11 +196,15 @@ public class SignalingServer {
             if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 204, null, null); return; }
             if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 405, null, null); return; }
+
+            String clientId = getQueryParam(ex.getRequestURI().getQuery(), "clientId");
+            if (clientId == null) clientId = "default";
+
             try {
                 String offerSdp = readString(ex);
                 ScreenStreamService s = svc();
                 if (s == null) { sendBytes(ex, 503, "Service not running".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
-                String answer = s.handleOffer(offerSdp);
+                String answer = s.handleOffer(offerSdp, clientId);
                 sendBytes(ex, 200, answer.getBytes(StandardCharsets.UTF_8), "application/sdp");
             } catch (Exception e) {
                 Log.e(TAG, "offer", e);
@@ -220,16 +219,19 @@ public class SignalingServer {
             String method = ex.getRequestMethod();
             if ("OPTIONS".equalsIgnoreCase(method)) { sendBytes(ex, 204, null, null); return; }
             if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
+
+            String clientId = getQueryParam(ex.getRequestURI().getQuery(), "clientId");
+            if (clientId == null) clientId = "default";
+
             ScreenStreamService s = svc();
             if (s == null) { sendBytes(ex, 503, "Service not running".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
             try {
                 if ("POST".equalsIgnoreCase(method)) {
                     JSONObject o = new JSONObject(readString(ex));
-                    s.addClientIce(o.optString("sdpMid"), o.optInt("sdpMLineIndex"),
-                            o.optString("candidate"));
+                    s.addClientIce(clientId, o.optString("sdpMid"), o.optInt("sdpMLineIndex"), o.optString("candidate"));
                     sendBytes(ex, 204, null, null);
                 } else {
-                    List<IceCandidate> list = s.drainServerIce();
+                    List<IceCandidate> list = s.drainServerIce(clientId);
                     JSONArray arr = new JSONArray();
                     for (IceCandidate c : list) {
                         JSONObject o = new JSONObject();
@@ -252,8 +254,15 @@ public class SignalingServer {
             cors(ex.getResponseHeaders());
             if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { sendBytes(ex, 204, null, null); return; }
             if (!checkAuth(ex)) { sendBytes(ex, 401, "Unauthorized".getBytes(StandardCharsets.UTF_8), "text/plain"); return; }
-            ScreenStreamService s = svc();
-            if (s != null) s.resetPeerConnection();
+
+            String clientId = getQueryParam(ex.getRequestURI().getQuery(), "clientId");
+            if (clientId != null) {
+                ScreenStreamService s = svc();
+                if (s != null) s.removeClient(clientId);
+            } else {
+                ScreenStreamService s = svc();
+                if (s != null) s.resetAllConnections();
+            }
             sendBytes(ex, 204, null, null);
         }
     }
